@@ -1,0 +1,25 @@
+---
+# tasks file for build
+- name: Install packages
+  apt: name={{ item }} state=present
+  with_items:
+    - default-jdk
+    - maven
+    - git
+
+- name: Clone repository
+  git:
+    repo: "https://github.com/boxfuse/boxfuse-sample-java-war-hello.git"
+    dest: "/files"
+    version: master 
+
+- name: Build
+  shell: mvn package
+  args:
+    chdir: "/files"
+
+- name: Copy .war-file to localhost
+  synchronize:
+    mode: pull
+    src: /files/target/hello-1.0.war
+    dest: /home/

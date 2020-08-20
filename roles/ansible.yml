@@ -1,0 +1,108 @@
+---
+- name: launch servers in AWS
+  hosts: localhost
+  vars:
+    region: us-east-1
+    instance_type: t2.micro
+    count: 1
+
+  tasks:
+
+  - name: create key pair
+    ec2_key: "name=my-key key_material={{ item }} region={{ region }}"
+    with_file: ~/.ssh/id_rsa.pub
+
+  - name: create prod security group
+    ec2_group:
+      name: prod_security_group
+      description: allow 8080 port
+      region: "{{ region }}"
+      rules:
+        - proto: tcp
+          from_port: 8080
+          to_port: 8080
+          cidr_ip: 0.0.0.0/0
+
+  - name: create ssh security group
+    ec2_group:
+      name: ssh_security_group
+      description: allow 22 port
+      region: "{{ region }}"
+      rules:
+        - proto: tcp
+          from_port: 22
+          to_port: 22
+          cidr_ip: 0.0.0.0/0
+
+  - name: outbound security group
+    ec2_group:
+      name: outbound
+      description: allow outbound connections
+      region: "{{ region }}"
+      rules_egress:
+        - proto: all
+          cidr_ip: 0.0.0.0/0
+
+  - name: create instance build
+    ec2:
+      region: "{{ region }}"
+      image: ami-0bcc094591f354be2
+      instance_type: "{{ instance_type }}"
+      key_name: my-key
+      group: [ssh_security_group, outbound]
+      instance_tags: { Name: build, type: build, env: build }
+      exact_count: "{{ count }}"
+      count_tag: { type: build }
+      wait: yes
+    register: ec2
+
+  - name: add instance to build groups
+    add_host: hostname={{ item.public_dns_name }} groups=build
+    with_items: "{{ ec2.tagged_instances }}"
+    when: item.public_dns_name is defined
+
+  - name: wait for ssh server to be running
+    wait_for: host={{ item.public_dns_name }} port=22 search_regex=OpenSSH
+    with_items: "{{ ec2.tagged_instances }}"
+    when: item.public_dns_name is defined
+
+  - name: create instance prod
+    ec2:
+      region: "{{ region }}"
+      image: ami-0bcc094591f354be2
+      instance_type: "{{ instance_type }}"
+      key_name: my-key
+      group: [ssh_security_group, prod_security_group, outbound]
+      instance_tags: { Name: prod, type: prod, env: prod }
+      exact_count: "{{ count }}"
+      count_tag: { type: prod }
+      wait: yes
+    register: ec2
+
+
+  - name: add instance to prod groups
+    add_host: hostname={{ item.public_dns_name }} groups=prod
+    with_items: "{{ ec2.tagged_instances }}"
+    when: item.public_dns_name is defined
+
+  - name: wait for ssh server to be running
+    wait_for: host={{ item.public_dns_name }} port=22 search_regex=OpenSSH
+    with_items: "{{ ec2.tagged_instances }}"
+    when: item.public_dns_name is defined
+
+
+- name: build server configuration
+  hosts: build
+  become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  roles:
+    - build
+
+- name: prod server configuration
+  hosts: prod
+  become: yes
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+  roles:
+    - prod
